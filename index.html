@@ -442,7 +442,8 @@ h1{font-size:clamp(28px,5.2vw,40px); line-height:1.12; margin:0 0 10px}
 .cert .body{flex:1; display:flex; flex-direction:column; justify-content:center; width:100%; padding:0 40px}
 .cert .foot{width:100%; padding:0 62px 40px; display:flex; justify-content:space-between; align-items:flex-end}
 .cert .fcol{text-align:center; width:300px; position:relative}
-.cert .dt{font-family:var(--serif); font-style:italic; font-weight:600; font-size:19px; letter-spacing:.14em; color:#111; padding-bottom:7px}
+.cert .dt{font-family:var(--serif); font-style:italic; font-weight:600; font-size:19px;
+  letter-spacing:.14em; color:#111; padding-bottom:7px; white-space:nowrap}
 .cert .sigline{border-top:1.4px solid #6b7075; padding-top:9px}
 .cert .lbl{font-family:var(--serif); font-weight:700; font-size:14px; letter-spacing:.09em; color:#2c3e50}
 .cert .lbl2{font-family:var(--serif); font-size:13.5px; color:#5a6b78; margin-top:2px}
@@ -976,6 +977,18 @@ const esc = s => String(s==null?"":s).replace(/[&<>"']/g, m => ({"&":"&amp;","<"
 const fmtDate = d => { const x = d?new Date(d):new Date();
   return String(x.getMonth()+1).padStart(2,"0")+"/"+String(x.getDate()).padStart(2,"0")+"/"+x.getFullYear(); };
 const spaced = s => s.split("").join(" ");
+/* Google Sheets turns "09/18/2026" into a real date cell and hands it back as
+   a full ISO timestamp, so never print a stored date without passing it here. */
+function fmtDateAny(v){
+  if (v == null || v === "") return fmtDate();
+  const s = String(v).trim();
+  let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);            // already MM/DD/YYYY
+  if (m) return m[1].padStart(2,"0") + "/" + m[2].padStart(2,"0") + "/" + m[3];
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);                         // ISO: take the date part
+  if (m) return m[2] + "/" + m[3] + "/" + m[1];                      // no timezone shifting
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? fmtDate() : fmtDate(d);
+}
 const titleCase = s => s.trim().replace(/\s+/g," ");
 const mmss = sec => Math.floor(sec/60)+":"+String(sec%60).padStart(2,"0");
 
@@ -1542,7 +1555,7 @@ async function screenAdmin(){
       <td>${s.minutesRead||0}m</td>
       <td>${(s.lang||"en").toUpperCase()}</td>
       <td>${s.emailedAt ? "yes" : ""}</td>
-      <td>${esc(new Date(s.submittedAt).toLocaleDateString())}<br><span style="color:var(--ink-3);font-size:13px">${esc(new Date(s.submittedAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}))}</span></td>
+      <td>${esc(fmtDateAny(s.submittedAt))}<br><span style="color:var(--ink-3);font-size:13px">${esc(new Date(s.submittedAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}))}</span></td>
       <td><span class="pill ${esc(s.status||"pending")}">${esc(s.status||"pending")}</span></td>
       <td style="white-space:nowrap">
         ${s.status==="skills"
@@ -1679,9 +1692,9 @@ function screenRoster(rows, which){
           <td class="num">${esc(String(s.score ?? ""))}%<div style="color:#5a6b78">${esc(String(s.correct ?? ""))}/${esc(String(s.total ?? ""))}</div></td>
           <td class="num">${esc(String(s.minutesRead || 0))}m</td>
           <td class="num">${esc(String(s.lang || "en").toUpperCase())}</td>
-          <td class="num">${esc(s.submittedAt ? new Date(s.submittedAt).toLocaleDateString() : "")}</td>
+          <td class="num">${esc(fmtDateAny(s.submittedAt))}</td>
           <td>${esc(label[st(s)] || st(s))}</td>
-          <td class="num">${esc(s.status === "issued" ? (s.certDate || "") : "")}</td>
+          <td class="num">${esc(s.status === "issued" ? fmtDateAny(s.certDate || s.submittedAt) : "")}</td>
         </tr>`).join("")}</tbody>
       </table>` : `<div class="rd-empty">No records in this report.</div>`}
 
@@ -1783,7 +1796,7 @@ function screenCert(s){
         : ""}
       <p class="mailstat" id="mailStat" hidden></p>
       <p class="roster-note" id="issueNote">${
-        s.status==="issued" ? "Issued "+esc(fmtDate(s.decidedAt))
+        s.status==="issued" ? "Issued "+esc(fmtDateAny(s.decidedAt || s.certDate))
       : s.status==="skills" ? "Mark the in-person skills check verified on the roster before signing this one."
       : "Issuing marks it on the roster. Print or save the PDF to send it."}</p>
     </div>
@@ -1832,7 +1845,7 @@ function screenCert(s){
     const b = this; b.disabled = true;
     const wantMail = !!(mailChk && mailChk.checked);
     try{
-      await setStatus(s.id, "issued", {certDate: s.certDate || fmtDate()});
+      await setStatus(s.id, "issued", {certDate: fmtDateAny(s.certDate || s.submittedAt)});
       s.status = "issued";
       b.textContent = "Signed and issued";
       document.getElementById("issueNote").textContent = "Issued " + fmtDate();
