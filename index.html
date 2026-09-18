@@ -842,12 +842,23 @@ async function bootCapabilities(){
   }catch(e){ DB = null; }
   if (DB) backend = "db";
   else if (REMOTE_URL) backend = "remote";
+  /* Settings must come from the same place for everyone: if the passing score
+     or the reading-time minimum only lived on the device that changed it, a
+     student on a phone would see different rules than the instructor set. */
+  settings = Object.assign({}, DEFAULTS, LS.read().settings || {});   // cached copy first
   try{
     if (DB){
       const s = await DB.doc("settings/app").get();
       if (s.exists) settings = Object.assign({}, DEFAULTS, s.data());
-    } else {
-      settings = Object.assign({}, DEFAULTS, LS.read().settings||{});
+    } else if (REMOTE_URL){
+      const res = await fetch(remoteUrl("action=settings&key=" + encodeURIComponent(WRITE_KEY)));
+      if (res.ok){
+        const remote = await res.json();
+        if (remote && !remote.error && typeof remote === "object"){
+          settings = Object.assign({}, DEFAULTS, remote);
+          const s = LS.read(); s.settings = settings; LS.write(s);   // cache for a slow start
+        }
+      }
     }
   }catch(e){}
   const b = document.getElementById("backendNote");
@@ -912,8 +923,17 @@ async function setStatus(id, status, extra){
 }
 async function saveSettings(next){
   settings = Object.assign({}, settings, next);
-  if (DB){ await DB.doc("settings/app").set(settings); return; }
   const s = LS.read(); s.settings = settings; LS.write(s);
+  if (DB){ await DB.doc("settings/app").set(settings); return; }
+  if (REMOTE_URL){
+    const res = await fetch(REMOTE_URL, {
+      method:"POST",
+      headers:{"Content-Type":"text/plain;charset=utf-8"},
+      body: JSON.stringify({action:"settings", key:adminKey, settings:settings})
+    });
+    const out = await res.json().catch(() => ({}));
+    if (out && out.error) throw Object.assign(new Error("settings"), {code:out.error});
+  }
 }
 
 /* ============================================================
@@ -1547,7 +1567,7 @@ async function exportCsv(subs){
 function renderSettings(body){
   body.innerHTML = `<div class="panel" style="max-width:520px">
     <h2>Course settings</h2>
-    <p class="sub">These apply to every course.</p>
+    <p class="sub">These apply to every course, on every device${(!DB && !REMOTE_URL) ? " that uses this browser" : " and for every student"}.</p>
     <div class="field"><label for="sPass">Passing score (%)</label>
       <input id="sPass" type="number" min="50" max="100" value="${settings.passPct}"></div>
     <div class="field"><label for="sMin">Minimum reading minutes per contact hour</label>
@@ -1566,7 +1586,7 @@ function renderSettings(body){
         minMinPerHour: Math.max(0, Math.min(60, +document.getElementById("sMin").value || 0)),
         facility: document.getElementById("sFac").value.trim() || DEFAULTS.facility
       });
-      b.textContent = "Settings saved";
+      b.textContent = (DB || REMOTE_URL) ? "Saved for everyone" : "Settings saved";
       setTimeout(()=>{ b.textContent = "Save settings"; b.disabled = false; }, 1600);
     }catch(e){
       const er = document.getElementById("sErr");
