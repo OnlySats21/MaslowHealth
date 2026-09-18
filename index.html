@@ -450,6 +450,16 @@ h1{font-size:clamp(28px,5.2vw,40px); line-height:1.12; margin:0 0 10px}
 .cert .prov{position:absolute; bottom:16px; left:0; right:0; text-align:center;
   font-family:var(--serif); font-size:11px; letter-spacing:.16em; color:#9aa3aa}
 .cert-actions{display:flex; gap:10px; flex-wrap:wrap; margin:18px 0 0}
+.mailrow{display:flex; align-items:flex-start; gap:10px; margin:14px 0 0; font-size:15.5px; color:var(--ink-2)}
+.mailrow input{width:19px; height:19px; accent-color:var(--go); margin-top:2px; flex:none}
+.mailrow label{line-height:1.45; cursor:pointer}
+.mailrow b{color:var(--ink)}
+.mailfields{display:grid; grid-template-columns:1fr 1fr; gap:14px; max-width:620px; margin:12px 0 0}
+@media (max-width:620px){.mailfields{grid-template-columns:1fr}}
+.mailfields .field{margin-bottom:0}
+.mailstat{font-size:14.5px; margin:10px 0 0; color:var(--ink-3)}
+.mailstat.ok{color:var(--go-dark); font-weight:600}
+.mailstat.bad{color:var(--stop)}
 
 
 @media print{
@@ -921,6 +931,28 @@ async function setStatus(id, status, extra){
     });
   }
 }
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+async function emailCertificate(sub, to, cc){
+  if (!REMOTE_URL) throw Object.assign(new Error("no endpoint"), {code:"no shared roster"});
+  const pdf = await certToPdfBase64();
+  const course = byId(sub.courseId) ? byId(sub.courseId).title : (sub.courseTitle || "");
+  const res = await fetch(REMOTE_URL, {
+    method:"POST",
+    headers:{"Content-Type":"text/plain;charset=utf-8"},
+    body: JSON.stringify({
+      action:"email", key:adminKey, id:sub.id, to:to, cc:cc || "",
+      name:sub.name, course:course, hours:sub.hours, certDate:sub.certDate || fmtDate(),
+      filename:(String(sub.name||"certificate").replace(/[^A-Za-z0-9 ]+/g,"").trim().replace(/\s+/g,"-")
+                + "-" + (byId(sub.courseId) ? byId(sub.courseId).short : "course").replace(/[^A-Za-z0-9]+/g,"-")
+                + ".pdf"),
+      pdf: pdf
+    })
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!out || out.error) throw Object.assign(new Error("send"), {code:(out && out.error) || "no reply"});
+  return out;
+}
+
 async function saveSettings(next){
   settings = Object.assign({}, settings, next);
   const s = LS.read(); s.settings = settings; LS.write(s);
@@ -1501,7 +1533,7 @@ async function screenAdmin(){
   }
 
   body.innerHTML = stats + `<div class="scroll-x"><table class="tbl">
-    <thead><tr><th>Name</th><th>Course</th><th>Hrs</th><th>Score</th><th>Read</th><th>Lang</th><th>Submitted</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th>Course</th><th>Hrs</th><th>Score</th><th>Read</th><th>Lang</th><th>Emailed</th><th>Submitted</th><th>Status</th><th></th></tr></thead>
     <tbody>${rows.map(s => `<tr>
       <td><strong>${esc(s.name)}</strong><br><span style="color:var(--ink-3);font-size:13.5px">${esc(s.email||"")}<br>${esc(s.facility||"")}</span></td>
       <td>${esc(byId(s.courseId) ? byId(s.courseId).short : s.courseTitle)}</td>
@@ -1509,6 +1541,7 @@ async function screenAdmin(){
       <td>${s.score}%<br><span style="color:var(--ink-3);font-size:13px">${s.correct}/${s.total}</span></td>
       <td>${s.minutesRead||0}m</td>
       <td>${(s.lang||"en").toUpperCase()}</td>
+      <td>${s.emailedAt ? "yes" : ""}</td>
       <td>${esc(new Date(s.submittedAt).toLocaleDateString())}<br><span style="color:var(--ink-3);font-size:13px">${esc(new Date(s.submittedAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}))}</span></td>
       <td><span class="pill ${esc(s.status||"pending")}">${esc(s.status||"pending")}</span></td>
       <td style="white-space:nowrap">
@@ -1716,6 +1749,39 @@ function screenCert(s){
         <button class="btn-line" id="print">Print / save as PDF</button>
         <button class="btn-line" id="back">Back to panel</button>
       </div>
+      ${(REMOTE_URL && s.status !== "issued" && s.status !== "skills")
+        ? `<div class="mailrow">
+             <input type="checkbox" id="mailChk" ${s.email ? "checked" : ""}>
+             <label for="mailChk">Email the signed certificate as a PDF attachment</label>
+           </div>
+           <div class="mailfields" id="mailFields" ${s.email ? "" : "hidden"}>
+             <div class="field">
+               <label for="mailTo">Send to</label>
+               <input id="mailTo" type="email" autocomplete="off" value="${esc(s.email || "")}">
+               <div class="hint">From their registration. Change it if it is wrong.</div>
+             </div>
+             <div class="field">
+               <label for="mailCc">Also copy to (optional)</label>
+               <input id="mailCc" type="email" autocomplete="off" placeholder="administrator@facility.com">
+               <div class="hint">Send the facility a copy for their training file.</div>
+             </div>
+           </div>`
+        : ""}
+      ${(REMOTE_URL && s.status === "issued")
+        ? `<div class="mailfields" id="mailFields">
+             <div class="field">
+               <label for="mailTo">Send to</label>
+               <input id="mailTo" type="email" autocomplete="off" value="${esc(s.emailedTo || s.email || "")}">
+               <div class="hint">${s.emailedAt ? "Already emailed once. Sending again is fine." : "Not emailed yet."}</div>
+             </div>
+             <div class="field">
+               <label for="mailCc">Also copy to (optional)</label>
+               <input id="mailCc" type="email" autocomplete="off" placeholder="administrator@facility.com">
+               <div class="hint">Send the facility a copy for their training file.</div>
+             </div>
+           </div>`
+        : ""}
+      <p class="mailstat" id="mailStat" hidden></p>
       <p class="roster-note" id="issueNote">${
         s.status==="issued" ? "Issued "+esc(fmtDate(s.decidedAt))
       : s.status==="skills" ? "Mark the in-person skills check verified on the roster before signing this one."
@@ -1749,8 +1815,22 @@ function screenCert(s){
   fitCert();
   document.getElementById("print").onclick = () => printDoc("landscape");
   document.getElementById("back").onclick = () => screenAdmin();
+  if (REMOTE_URL && s.status === "issued") setTimeout(() => showResend(), 0);
+  const mailChk  = document.getElementById("mailChk");
+  const mailFlds = document.getElementById("mailFields");
+  const mailStat = document.getElementById("mailStat");
+  if (mailChk && mailFlds)
+    mailChk.addEventListener("change", () => { mailFlds.hidden = !mailChk.checked; });
+  const setStat = (msg, cls) => {
+    mailStat.textContent = msg;
+    mailStat.className = "mailstat" + (cls ? " " + cls : "");
+    mailStat.hidden = !msg;
+  };
+  if (mailChk) document.getElementById("issue").textContent = "Sign, issue and email";
+
   document.getElementById("issue").onclick = async function(){
     const b = this; b.disabled = true;
+    const wantMail = !!(mailChk && mailChk.checked);
     try{
       await setStatus(s.id, "issued", {certDate: s.certDate || fmtDate()});
       s.status = "issued";
@@ -1759,9 +1839,95 @@ function screenCert(s){
     }catch(e){
       b.disabled = false;
       document.getElementById("issueNote").textContent = "Could not update the roster (" + (e&&e.code?e.code:"error") + "). The certificate can still be printed.";
+      return;
+    }
+    if (!wantMail) return;
+    const to = (document.getElementById("mailTo") || {}).value || "";
+    const cc = (document.getElementById("mailCc") || {}).value || "";
+    if (!EMAIL_RE.test(to.trim())){
+      setStat("The certificate was issued, but that email address does not look right, so nothing was sent. Fix it and use Resend.", "bad");
+      showResend(); return;
+    }
+    if (cc.trim() && !EMAIL_RE.test(cc.trim())){
+      setStat("The certificate was issued, but the copy-to address does not look right, so nothing was sent. Fix it and use Resend.", "bad");
+      showResend(); return;
+    }
+    try{
+      setStat("Building the PDF\u2026");
+      const out = await emailCertificate(s, to.trim(), cc.trim());
+      setStat("Emailed to " + to.trim() + (cc.trim() ? ", copy to " + cc.trim() : "")
+              + (out && out.sentAt ? " at " + new Date(out.sentAt).toLocaleTimeString() : ""), "ok");
+      showResend();
+    }catch(e){
+      setStat("The certificate was issued but the email did not send ("
+              + (e && e.code ? e.code : "error") + "). Fix the address and use Resend, or print the PDF and send it yourself.", "bad");
+      showResend();
     }
   };
+
+  function showResend(){
+    if (document.getElementById("resendBtn")) return;
+    if (!document.querySelector(".cert-actions")) return;
+    const row = document.querySelector(".cert-actions");
+    const btn = document.createElement("button");
+    btn.className = "btn-line"; btn.id = "resendBtn"; btn.textContent = "Resend email";
+    row.appendChild(btn);
+    btn.onclick = async () => {
+      const to2 = (document.getElementById("mailTo") || {}).value.trim();
+      const cc2 = (document.getElementById("mailCc") || {}).value.trim();
+      if (!EMAIL_RE.test(to2)){ setStat("That email address does not look right.", "bad"); return; }
+      if (cc2 && !EMAIL_RE.test(cc2)){ setStat("That copy-to address does not look right.", "bad"); return; }
+      btn.disabled = true; setStat("Building the PDF\u2026");
+      try{
+        const out = await emailCertificate(s, to2, cc2);
+        setStat("Emailed to " + to2 + (cc2 ? ", copy to " + cc2 : "")
+                + (out && out.sentAt ? " at " + new Date(out.sentAt).toLocaleTimeString() : ""), "ok");
+      }catch(e2){
+        setStat("Still could not send (" + (e2 && e2.code ? e2.code : "error") + ").", "bad");
+      }
+      btn.disabled = false;
+    };
+  }
 }
+/* Loads html2canvas + jsPDF the first time a certificate is emailed. They are
+   not needed for anything else, so students never download them and the page
+   stays fully self-contained for normal use. */
+let pdfLibs = null;
+function loadScript(src){
+  return new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = src; s.onload = res; s.onerror = () => rej(new Error("could not load " + src));
+    document.head.appendChild(s);
+  });
+}
+async function ensurePdfLibs(){
+  if (pdfLibs) return pdfLibs;
+  if (!window.html2canvas)
+    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js");
+  if (!(window.jspdf && window.jspdf.jsPDF))
+    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
+  if (!window.html2canvas || !(window.jspdf && window.jspdf.jsPDF))
+    throw new Error("pdf tools unavailable");
+  pdfLibs = { h2c: window.html2canvas, jsPDF: window.jspdf.jsPDF };
+  return pdfLibs;
+}
+/* Renders the certificate element exactly as shown, at print resolution. */
+async function certToPdfBase64(){
+  const { h2c, jsPDF } = await ensurePdfLibs();
+  const el = document.getElementById("certEl");
+  if (!el) throw new Error("no certificate on screen");
+  const prev = el.style.transform;
+  el.style.transform = "none";                     // capture at full size, not the fitted scale
+  let canvas;
+  try{
+    canvas = await h2c(el, { scale:2, backgroundColor:"#f5f5f5", useCORS:true, logging:false,
+                             width:1056, height:816, windowWidth:1056 });
+  } finally { el.style.transform = prev; }
+  const pdf = new jsPDF({ orientation:"landscape", unit:"in", format:"letter", compress:true });
+  pdf.addImage(canvas.toDataURL("image/jpeg", 0.94), "JPEG", 0, 0, 11, 8.5);
+  return pdf.output("datauristring").split(",")[1];
+}
+
 function printDoc(orientation){
   let st = document.getElementById("pageSize");
   if (!st){ st = document.createElement("style"); st.id = "pageSize"; document.head.appendChild(st); }
